@@ -35,18 +35,25 @@ class PHPloy
     public $revision;
 
     /**
-     * Keep track of which server we are currently deploying to
+     * Alias/name of the server we are currently deploying to
      *
-     * @var string $currentlyDeploying
+     * @var string $currentDeployServerName
      */
-    public $currentlyDeploying = '';
+    public $currentDeployServerName = '';
 
     /**
-     * A list of files that should NOT be uploaded to the remote server
+     * Array of paths or glob patterns of files that should NOT be uploaded to the remote server
+
+     * Array is populated from deploy.ini and indexed by the server name, example:
      *
-     * @var array $filesToIgnore
+     *      ['staging' => ['*.log', '*.psd'], 'production' => ['libs/*']]
+     *
+     * Submodules that are found in the repo will also be added here as they are excluded from the initial
+     * deployment and deployed separately.
+     *
+     * @var array $patternsToIgnore
      */
-    public $filesToIgnore = array();
+    public $patternsToIgnore = array();
     
     /**
      * A list of files that should NOT be uploaded to the any defined server
@@ -67,6 +74,8 @@ class PHPloy
     public $scanForSubSubmodules = true;
 
     /**
+     * This array gets populated with URIs of the one or more deployment destinations listed in deploy.ini
+     *
      * @var array $servers
      */
     public $servers = array();
@@ -233,9 +242,11 @@ class PHPloy
     public function displayHelp()
     {
         // $this->output();
-        $readMe = __DIR__ . '/readme.md';
+        $readMe = __DIR__ . '/../readme.md';
         if (file_exists($readMe))
             $this->output(file_get_contents($readMe));
+        else
+            throw new \Exception("$readMe could not be found");
     }
 
     /**
@@ -310,7 +321,7 @@ class PHPloy
             foreach ($output as $line) {
                 $line = explode(' ', trim($line));
                 $this->submodules[] = array('revision' => $line[0], 'name' => $line[1], 'path' => $repo.'/'.$line[1]);
-                $this->filesToIgnore[] = $line[1];
+                $this->patternsToIgnore[] = $line[1];
                 $this->output(sprintf('   Found submodule %s. %s', 
                     $line[1],
                     $this->scanForSubSubmodules ? 'Scanning for sub-submodules...' : null
@@ -350,7 +361,7 @@ class PHPloy
                     'name' => $name.'/'.$line[1], 
                     'path' => $repo.'/'.$name.'/'.$line[1]
                 );
-                $this->filesToIgnore[] = $line[1];
+                $this->patternsToIgnore[] = $line[1];
                 $this->output(sprintf('      Found sub-submodule %s.', "$name/$line[1]"));
             }
         }
@@ -372,6 +383,8 @@ class PHPloy
             if (! $servers) {
                  throw new \Exception("'$deploy' is not a valid .ini file.");
             } else {
+                $this->debug("\r\nReading $deploy to discover credentials...");
+                $this->debug($servers);
                 return $servers;
             }
         }
@@ -399,17 +412,30 @@ class PHPloy
         $servers = $this->parseCredentials($ini);
 
         foreach ($servers as $name => $options) {
+
+            // Temporarily providing backwards-compatibility for PHPloy v2 quickmode syntax
+            // where the heading was [quickmode] followed by the name and URI
+            if ( $name == 'quickmode' ) {
+                $this->output('<yellow>Warning: the syntax for quickmode has changed in PHPloy v3. Please view phploy --help to find the new syntax. The syntax you\'re currently using may not be supported in future versions.');
+                foreach ( $options as $environmentName => $path ) {
+                    $this->servers[$environmentName] = $path;
+                }
+            }
+
             if ( isset( $options['quickmode'] ) ) {
                 $this->servers[$name] = $options['quickmode'];
+
+                // Not sure if we should continue here, otherwise skip[] commands may get overlooked
+                // Should probably move this "if" under the ->patternsToIgnore lines
                 continue;
             }
 
             $options = array_merge($defaults, $options);
 
             if(!empty($servers[$name]['skip']))
-                $this->filesToIgnore[$name] = array_merge($this->globalFilesToIgnore, $servers[$name]['skip']);
+                $this->patternsToIgnore[$name] = array_merge($this->globalFilesToIgnore, $servers[$name]['skip']);
 
-            $this->filesToIgnore[$name][] = $this->deployIniFilename;
+            $this->patternsToIgnore[$name][] = $this->deployIniFilename;
 
             // Turn options into an URL so that Bridge can accept it.
             $this->servers[$name] = http_build_url('', $options);
@@ -451,11 +477,12 @@ class PHPloy
     }
 
     /**
-     * Compare revisions and returns array of files to upload:
+     * Compare revisions and returns array of files changed:
      *
      *      array(
      *          'upload' => $filesToUpload,
-     *          'delete' => $filesToDelete
+     *          'delete' => $filesToDelete,
+     *          'skip' => $patternsToIgnore
      *      );
      *
      * @param string $localRevision
@@ -514,7 +541,7 @@ class PHPloy
 		}
 
         foreach($filesToUpload as $file) {
-            foreach($this->filesToIgnore[$this->currentlyDeploying] as $pattern) {
+            foreach($this->patternsToIgnore[$this->currentDeployServerName] as $pattern) {
                 if($this->patternMatch($pattern, $file)) {
                     $filesToSkip[] = $file;
                 }
@@ -524,7 +551,7 @@ class PHPloy
         $filesToUpload = array_values(array_diff($filesToUpload, $filesToSkip));
 
         return array(
-            $this->currentlyDeploying => array(
+            $this->currentDeployServerName => array(
                 'upload' => $filesToUpload,
                 'delete' => $filesToDelete,
                 'skip' => $filesToSkip,
@@ -548,7 +575,7 @@ class PHPloy
         // Loop through all the servers in deploy.ini
         foreach ($this->servers as $name => $server) {
 
-            $this->currentlyDeploying = $name;
+            $this->currentDeployServerName = $name;
             
             // Deploys to ALL servers by default
             // If a server is specified, we skip all servers that don't match the one specified
@@ -566,9 +593,9 @@ class PHPloy
 
             $this->output("\r\n<white>SERVER: ".$name);
             if ($this->listFiles === true) {
-                $this->listFiles($files[$this->currentlyDeploying]);
+                $this->listFiles($files[$this->currentDeployServerName]);
             } else {
-                $this->push($files[$this->currentlyDeploying]);
+                $this->push($files[$this->currentDeployServerName]);
             }
 
             if (count($this->submodules) > 0) {
@@ -581,7 +608,7 @@ class PHPloy
                     $files = $this->compare($revision);
 
                     if ($this->listFiles === true) {
-                        $this->listFiles($files[$this->currentlyDeploying]);
+                        $this->listFiles($files[$this->currentDeployServerName]);
                     } else {
                         $this->push($files);
                     } 
@@ -656,8 +683,7 @@ class PHPloy
     public function connect($server)
     {
         try {
-            $connection = new Bridge($server);
-            $this->connection = $connection;            
+            $this->connection = new Bridge($server);
         } catch (\Exception $e) {
             echo Ansi::tagsToColors("\r\n<red>Oh Snap: {$e->getMessage()}\r\n");
         }        
@@ -837,8 +863,12 @@ class PHPloy
      */
     public function debug($message) 
     {
-        if ($this->debug)
-            $this->output("$message");
+        if ($this->debug) {
+            if (is_array($message))
+                $this->output(print_r($message, true));
+            else
+                $this->output("$message");
+        }
     }
 
     /**

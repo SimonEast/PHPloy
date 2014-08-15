@@ -1,7 +1,11 @@
 # PHPloy
-**Version 3.0.1-alpha**
+**Version 3.0.7-alpha**
 
 PHPloy is a incremental Git FTP deployment tool. By keeping track of the state of the remote server(s) it deploys only the files that were committed since the last deployment. PHPloy supports submodules, sub-submodules, deploying to multiple servers and rollbacks.
+
+PHPloy has built-in support for deploying to remote servers over FTP and FTPS.
+
+With the [PHP SSH2 extension](http://pecl.php.net/package/ssh2) PHPloy can also deploy over SFTP, SSH, and SCP.  Additional protocols can be easily plugged if you desire.
 
 ## Requirements
 
@@ -166,7 +170,6 @@ v3.0.0-alpha (9 August 2014)
 * Added SFTP support
 * Composer package
 * Phar file added
-
 
 v2.0.0-beta3 (26 May 2014)
 
